@@ -1,0 +1,10 @@
+{
+  "domain": "central_heating_demand",
+  "name": "Central Heating Demand",
+  "documentation": "https://github.com/your_github_username/central_heating_demand",
+  "issue_tracker": "https://github.com/your_github_username/central_heating_demand/issues",
+  "dependencies": [],
+  "codeowners": ["@your_github_username"],
+  "requirements": [],
+  "version": "1.0.0"
+}
