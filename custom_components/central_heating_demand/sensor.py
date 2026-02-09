@@ -29,7 +29,7 @@ CONF_TRV_CLIMATE_ENTITIES = "trv_climate_entities"
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
         vol.Required(CONF_TRV_CLIMATE_ENTITIES): vol.All(
-            vol.EnsureSquareBracketedString(), [str]
+            EnsureSquareBracketedString(), [str]
         ),
     }
 )
