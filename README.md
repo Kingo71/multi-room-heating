@@ -100,8 +100,9 @@ The sensor exposes additional attributes representing the "Maximum Demand" (the 
 
 -   `max_demand_current_temperature`: The current temperature of the room with the highest heating deficit.
 -   `max_demand_target_temperature`: The target temperature of that same room.
--   `max_demand_delta`: The difference between target and current temperature.
+-   `max_demand_delta`: The difference between target and current temperature (clamped to 0 if negative).
 -   `max_demand_trv_entity_id`: The entity ID of the TRV driving the demand.
+-   `heating_active`: Boolean (`true`/`false`) indicating if any TRV is actually demanding heat.
 
 ### ESPHome Configuration Example
 
@@ -143,6 +144,8 @@ sensor:
     # Optional: Temperature to set when no heat is needed (default: 5.0)
     minimum_temperature: 15
 ```
+
+**Note:** When using Direct Control, you do **not** need to import `max_demand_target_temperature` into ESPHome, because this integration sets the target temperature for you. However, your ESPHome thermostat/PID controller will likely still need to import `max_demand_current_temperature` to know the current room temperature for modulation calculations.
 
 ## Troubleshooting
 

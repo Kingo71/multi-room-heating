@@ -206,7 +206,8 @@ class CentralHeatingDemandSensor(SensorEntity):
         self._is_heating_demanded = demanding_trvs > 0
         
         if valid_trv_found and leader_entity_id:
-             self._max_demand_delta = max_delta
+             # User Request: If demand delta is negative, show it as zero.
+             self._max_demand_delta = max(0.0, max_delta)
              self._max_demand_current_temperature = leader_current_temp
              self._max_demand_target_temperature = leader_target_temp
              self._max_demand_trv_entity_id = leader_entity_id
@@ -267,5 +268,6 @@ class CentralHeatingDemandSensor(SensorEntity):
             "max_demand_target_temperature": self._max_demand_target_temperature,
             "max_demand_trv_entity_id": self._max_demand_trv_entity_id,
             "heater_entity_id": self._heater_entity_id,
+            "heating_active": self._is_heating_demanded,
         }
 
