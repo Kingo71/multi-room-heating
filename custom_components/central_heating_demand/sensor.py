@@ -106,6 +106,7 @@ class CentralHeatingDemandSensor(SensorEntity):
         self._max_demand_target_temperature = None
         self._max_demand_trv_entity_id = None
         self._last_sent_target_temperature = None
+        self._last_sent_hvac_mode = None
 
     async def async_added_to_hass(self) -> None:
         """Register callbacks when entity is added."""
@@ -220,37 +221,59 @@ class CentralHeatingDemandSensor(SensorEntity):
 
         # Control the heater if configured
         if self._heater_entity_id:
-            # If heating is demanded, set target to the max demand target
-            # If not demanded (or no valid TRVs), set to minimum temperature
-            if self._is_heating_demanded and self._max_demand_target_temperature is not None:
-                target_to_set = self._max_demand_target_temperature
-            else:
-                target_to_set = self._minimum_temperature
+            target_hvac_mode = "off"
+            target_to_set = self._minimum_temperature
 
-            self.hass.async_create_task(self._async_control_heater(target_to_set))
+            if self._is_heating_demanded:
+                target_hvac_mode = "heat"
+                if self._max_demand_target_temperature is not None:
+                     target_to_set = self._max_demand_target_temperature
 
-    async def _async_control_heater(self, target_temp: float) -> None:
-        """Send command to heater if the target temperature has changed."""
-        if self._last_sent_target_temperature == target_temp:
-            return
-
-        _LOGGER.debug(
-            "Setting heater %s temperature to %s", self._heater_entity_id, target_temp
-        )
-        
-        try:
-             await self.hass.services.async_call(
-                "climate",
-                "set_temperature",
-                {
-                    "entity_id": self._heater_entity_id,
-                    "temperature": target_temp,
-                },
-                blocking=False, # Don't block the event loop
+            self.hass.async_create_task(
+                self._async_control_heater(target_to_set, target_hvac_mode)
             )
-             self._last_sent_target_temperature = target_temp
-        except Exception as e:
-            _LOGGER.error("Failed to set heater temperature: %s", e)
+
+    async def _async_control_heater(self, target_temp: float, target_hvac_mode: str) -> None:
+        """Send command to heater if configuration has changed."""
+        
+        # 1. Handle Temperature Change
+        if self._last_sent_target_temperature != target_temp:
+            _LOGGER.debug(
+                "Setting heater %s temperature to %s", self._heater_entity_id, target_temp
+            )
+            try:
+                await self.hass.services.async_call(
+                    "climate",
+                    "set_temperature",
+                    {
+                        "entity_id": self._heater_entity_id,
+                        "temperature": target_temp,
+                    },
+                    blocking=False,
+                )
+                self._last_sent_target_temperature = target_temp
+            except Exception as e:
+                _LOGGER.error("Failed to set heater temperature: %s", e)
+
+        # 2. Handle HVAC Mode Change
+        # We check a new instance variable _last_sent_hvac_mode (need to init it)
+        if getattr(self, "_last_sent_hvac_mode", None) != target_hvac_mode:
+            _LOGGER.debug(
+                "Setting heater %s hvac_mode to %s", self._heater_entity_id, target_hvac_mode
+            )
+            try:
+                await self.hass.services.async_call(
+                    "climate",
+                    "set_hvac_mode",
+                    {
+                        "entity_id": self._heater_entity_id,
+                        "hvac_mode": target_hvac_mode,
+                    },
+                    blocking=False,
+                )
+                self._last_sent_hvac_mode = target_hvac_mode
+            except Exception as e:
+                _LOGGER.error("Failed to set heater hvac_mode: %s", e)
 
 
     @property

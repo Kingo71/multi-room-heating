@@ -127,7 +127,8 @@ You can also configure this integration to directly control your boiler/heater e
 
 If you add the `heater_entity_id` to your configuration, the integration will automatically:
 1.  **Set Target Temp**: When heating is needed, it sets the heater's target temperature to match the room with the highest demand.
-2.  **Frost Protection**: When no heating is needed, it sets the heater's target temperature to a minimum value (default 5°C).
+2.  **Set HVAC Mode**: It sets the heater's mode to `heat` when demand exists, and `off` when satisfied.
+3.  **Frost Protection**: When no heating is needed, it sets the heater's target temperature to a minimum value (default 5°C).
 
 **Configuration Example:**
 
