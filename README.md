@@ -9,6 +9,15 @@ This custom component for Home Assistant provides a sensor to monitor the heatin
 -   **Flexible Boiler Control:** Allows you to create powerful automations to control your boiler based on real heating demand, potentially saving energy.
 -   **Easy Configuration:** Simple setup via `configuration.yaml`.
 
+## Breaking Changes
+
+> [!WARNING]
+> **v1.1.0 Update**: This integration has moved from the `sensor` platform to the `binary_sensor` platform.
+>
+> 1.  **Configuration**: You must change your `configuration.yaml` entry from `sensor:` to `binary_sensor:`.
+> 2.  **Entity ID**: The entity will now be created as `binary_sensor.central_heating_demand` instead of `sensor.central_heating_demand`.
+> 3.  **Automations**: Update any automations or scripts that reference the old entity ID.
+
 ## Installation
 
 1.  **Copy the Custom Component:**
@@ -33,11 +42,11 @@ This custom component for Home Assistant provides a sensor to monitor the heatin
 
 ## Configuration
 
-To use this integration, add the following to your `configuration.yaml` file (or a file included by it, such as `sensors.yaml`):
+To use this integration, add the following to your `configuration.yaml` file (or a file included by it, such as `binary_sensors.yaml`):
 
 ```yaml
-# configuration.yaml or sensors.yaml
-sensor:
+# configuration.yaml or binary_sensors.yaml
+binary_sensor:
   - platform: central_heating_demand
     trv_climate_entities:
       - climate.trv_living_room   # Replace with your first TRV entity ID
@@ -49,13 +58,13 @@ sensor:
 
 ## Usage
 
-After restarting, you will have a new sensor called `sensor.central_heating_demand`. This sensor's state will be:
+After restarting, you will have a new sensor called `binary_sensor.central_heating_demand`. This sensor's state will be:
 -   `on`: When at least one of the monitored TRVs is demanding heat.
 -   `off`: When none of the monitored TRVs are demanding heat.
 
 ### Automation Example
 
-You can use this sensor to create an automation that controls your main boiler thermostat (`climate.thermostat_boiler` in this example).
+You can use this binary sensor to create an automation that controls your main boiler thermostat (`climate.thermostat_boiler` in this example).
 
 Here is a sample automation. You can add this to your `automations.yaml` file or create it using the Automation Editor in the UI.
 
@@ -64,11 +73,11 @@ Here is a sample automation. You can add this to your `automations.yaml` file or
 - alias: Control Boiler based on Central Heating Demand
   trigger:
     - platform: state
-      entity_id: sensor.central_heating_demand
+      entity_id: binary_sensor.central_heating_demand
       to: "on"
       id: "demand_on"
     - platform: state
-      entity_id: sensor.central_heating_demand
+      entity_id: binary_sensor.central_heating_demand
       to: "off"
       id: "demand_off"
   action:
@@ -96,7 +105,7 @@ Here is a sample automation. You can add this to your `automations.yaml` file or
 
 This integration is designed to work with OpenTherm thermostats (via ESPHome or similar) that require a target temperature input rather than a simple on/off switch.
 
-The sensor exposes additional attributes representing the "Maximum Demand" (the room with the largest gap between current and target temperature):
+The binary sensor exposes additional attributes representing the "Maximum Demand" (the room with the largest gap between current and target temperature):
 
 -   `max_demand_current_temperature`: The current temperature of the room with the highest heating deficit.
 -   `max_demand_target_temperature`: The target temperature of that same room.
@@ -111,12 +120,12 @@ You can use these attributes to feed your OpenTherm PID regulator or thermostat 
 sensor:
   - platform: homeassistant
     id: central_current_temp
-    entity_id: sensor.central_heating_demand
+    entity_id: binary_sensor.central_heating_demand
     attribute: max_demand_current_temperature
 
   - platform: homeassistant
     id: central_target_temp
-    entity_id: sensor.central_heating_demand
+    entity_id: binary_sensor.central_heating_demand
     attribute: max_demand_target_temperature
 ```
 
@@ -132,7 +141,7 @@ If you add the `heater_entity_id` to your configuration, the integration will au
 **Configuration Example:**
 
 ```yaml
-sensor:
+binary_sensor:
   - platform: central_heating_demand
     trv_climate_entities:
       - climate.living_room

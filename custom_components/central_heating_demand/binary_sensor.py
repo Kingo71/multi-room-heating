@@ -1,13 +1,13 @@
-"""Sensor platform for the central heating demand integration."""
+"""Binary sensor platform for the central heating demand integration."""
 from __future__ import annotations
 
 import logging
 
 import voluptuous as vol
 
-from homeassistant.components.sensor import (
+from homeassistant.components.binary_sensor import (
     PLATFORM_SCHEMA,
-    SensorEntity,
+    BinarySensorEntity,
 )
 from homeassistant.const import EVENT_HOMEASSISTANT_START
 from homeassistant.core import (
@@ -74,15 +74,17 @@ async def async_setup_platform(
 
     async_add_entities(
         [
-            CentralHeatingDemandSensor(
+    async_add_entities(
+        [
+            CentralHeatingDemandBinarySensor(
                 hass, trv_climate_entities, heater_entity_id, minimum_temperature
             )
         ]
     )
 
 
-class CentralHeatingDemandSensor(SensorEntity):
-    """Representation of a Central Heating Demand Sensor."""
+class CentralHeatingDemandBinarySensor(BinarySensorEntity):
+    """Representation of a Central Heating Demand Binary Sensor."""
 
     _attr_name = "Central Heating Demand"
     _attr_icon = "mdi:radiator"
@@ -277,9 +279,9 @@ class CentralHeatingDemandSensor(SensorEntity):
 
 
     @property
-    def state(self):
-        """Return the state of the sensor."""
-        return "on" if self._is_heating_demanded else "off"
+    def is_on(self) -> bool:
+        """Return true if the binary sensor is on."""
+        return self._is_heating_demanded
 
     @property
     def extra_state_attributes(self):
