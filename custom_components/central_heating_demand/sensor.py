@@ -24,13 +24,39 @@ _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "central_heating_demand"
 
+
+# Helper function for vol.All(vol.EnsureSquareBracketedString(), [str])
+# This is to handle cases where the user might pass a single string instead of a list
+# or a string that should be parsed as a list.
+def EnsureSquareBracketedString():
+    def validate(value):
+        if isinstance(value, str):
+            try:
+                # Attempt to parse as a JSON list (e.g., '["climate.trv1", "climate.trv2"]')
+                import json
+                parsed_value = json.loads(value)
+                if isinstance(parsed_value, list):
+                    return parsed_value
+            except json.JSONDecodeError:
+                pass
+            # If it's a single string, treat it as a list with one item
+            return [value]
+        elif isinstance(value, list):
+            return value
+        raise vol.Invalid("Expected a string or a list of strings")
+    return validate
+
 CONF_TRV_CLIMATE_ENTITIES = "trv_climate_entities"
+CONF_HEATER_ENTITY_ID = "heater_entity_id"
+CONF_MINIMUM_TEMPERATURE = "minimum_temperature"
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
         vol.Required(CONF_TRV_CLIMATE_ENTITIES): vol.All(
             EnsureSquareBracketedString(), [str]
         ),
+        vol.Optional(CONF_HEATER_ENTITY_ID): str,
+        vol.Optional(CONF_MINIMUM_TEMPERATURE, default=5.0): vol.Coerce(float),
     }
 )
 
@@ -43,8 +69,16 @@ async def async_setup_platform(
 ) -> None:
     """Set up the Central Heating Demand sensor platform."""
     trv_climate_entities: list[str] = config[CONF_TRV_CLIMATE_ENTITIES]
+    heater_entity_id: str | None = config.get(CONF_HEATER_ENTITY_ID)
+    minimum_temperature: float = config[CONF_MINIMUM_TEMPERATURE]
 
-    async_add_entities([CentralHeatingDemandSensor(hass, trv_climate_entities)])
+    async_add_entities(
+        [
+            CentralHeatingDemandSensor(
+                hass, trv_climate_entities, heater_entity_id, minimum_temperature
+            )
+        ]
+    )
 
 
 class CentralHeatingDemandSensor(SensorEntity):
@@ -54,11 +88,24 @@ class CentralHeatingDemandSensor(SensorEntity):
     _attr_icon = "mdi:radiator"
     _attr_should_poll = False  # We'll use event listeners
 
-    def __init__(self, hass: HomeAssistant, trv_climate_entities: list[str]) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        trv_climate_entities: list[str],
+        heater_entity_id: str | None,
+        minimum_temperature: float,
+    ) -> None:
         """Initialize the sensor."""
         self.hass = hass
         self._trv_climate_entities = trv_climate_entities
+        self._heater_entity_id = heater_entity_id
+        self._minimum_temperature = minimum_temperature
         self._is_heating_demanded = False
+        self._max_demand_delta = 0.0
+        self._max_demand_current_temperature = None
+        self._max_demand_target_temperature = None
+        self._max_demand_trv_entity_id = None
+        self._last_sent_target_temperature = None
 
     async def async_added_to_hass(self) -> None:
         """Register callbacks when entity is added."""
@@ -107,8 +154,16 @@ class CentralHeatingDemandSensor(SensorEntity):
 
     @callback
     def _async_update_heating_demand(self) -> None:
-        """Calculate if any TRV is currently demanding heating."""
+        """Calculate if any TRV is currently demanding heating and find the max demand."""
         demanding_trvs = 0
+        max_delta = -100.0  # Initialize with a very low value
+        leader_entity_id = None
+        leader_current_temp = None
+        leader_target_temp = None
+        
+        # Track if we found at least one valid TRV to report on
+        valid_trv_found = False
+
         for entity_id in self._trv_climate_entities:
             state = self.hass.states.get(entity_id)
             if not state:
@@ -120,18 +175,82 @@ class CentralHeatingDemandSensor(SensorEntity):
             target_temperature = state.attributes.get("temperature")
             trv_state = state.state
 
-            # Logic copied from user's template sensor
+            # Ensure we have valid numbers to work with
+            if current_temperature is None or target_temperature is None:
+                continue
+                
+            valid_trv_found = True
+            
+            # Calculate demand delta (Target - Current)
+            # A positive delta means heat is needed.
+            delta = target_temperature - current_temperature
+
+            # Check for binary demand (existing logic + check)
+            is_demanding = False
             if hvac_action == "heating" or (
                 trv_state == "heat"
-                and current_temperature is not None
-                and target_temperature is not None
-                and current_temperature < target_temperature
+                and delta > 0
             ):
+                is_demanding = True
                 demanding_trvs += 1
-                # If at least one TRV demands heating, we can stop checking
-                break
+
+            # Determine if this TRV has the highest demand (largest deficit)
+            # We track the max delta even if it's negative (closest to target) 
+            # so we always report *something* reasonable to the OpenTherm thermostat.
+            if delta > max_delta:
+                max_delta = delta
+                leader_entity_id = entity_id
+                leader_current_temp = current_temperature
+                leader_target_temp = target_temperature
 
         self._is_heating_demanded = demanding_trvs > 0
+        
+        if valid_trv_found and leader_entity_id:
+             self._max_demand_delta = max_delta
+             self._max_demand_current_temperature = leader_current_temp
+             self._max_demand_target_temperature = leader_target_temp
+             self._max_demand_trv_entity_id = leader_entity_id
+        else:
+             # Fallback if no valid TRVs found
+             self._max_demand_delta = 0.0
+             self._max_demand_current_temperature = None
+             self._max_demand_target_temperature = None
+             self._max_demand_trv_entity_id = None
+
+        # Control the heater if configured
+        if self._heater_entity_id:
+            # If heating is demanded, set target to the max demand target
+            # If not demanded (or no valid TRVs), set to minimum temperature
+            if self._is_heating_demanded and self._max_demand_target_temperature is not None:
+                target_to_set = self._max_demand_target_temperature
+            else:
+                target_to_set = self._minimum_temperature
+
+            self.hass.async_create_task(self._async_control_heater(target_to_set))
+
+    async def _async_control_heater(self, target_temp: float) -> None:
+        """Send command to heater if the target temperature has changed."""
+        if self._last_sent_target_temperature == target_temp:
+            return
+
+        _LOGGER.debug(
+            "Setting heater %s temperature to %s", self._heater_entity_id, target_temp
+        )
+        
+        try:
+             await self.hass.services.async_call(
+                "climate",
+                "set_temperature",
+                {
+                    "entity_id": self._heater_entity_id,
+                    "temperature": target_temp,
+                },
+                blocking=False, # Don't block the event loop
+            )
+             self._last_sent_target_temperature = target_temp
+        except Exception as e:
+            _LOGGER.error("Failed to set heater temperature: %s", e)
+
 
     @property
     def state(self):
@@ -141,26 +260,12 @@ class CentralHeatingDemandSensor(SensorEntity):
     @property
     def extra_state_attributes(self):
         """Return the state attributes."""
-        return {"trv_climate_entities": self._trv_climate_entities}
-
-# Helper function for vol.All(vol.EnsureSquareBracketedString(), [str])
-# This is to handle cases where the user might pass a single string instead of a list
-# or a string that should be parsed as a list.
-def EnsureSquareBracketedString():
-    def validate(value):
-        if isinstance(value, str):
-            try:
-                # Attempt to parse as a JSON list (e.g., '["climate.trv1", "climate.trv2"]')
-                import json
-                parsed_value = json.loads(value)
-                if isinstance(parsed_value, list):
-                    return parsed_value
-            except json.JSONDecodeError:
-                pass
-            # If it's a single string, treat it as a list with one item
-            return [value]
-        elif isinstance(value, list):
-            return value
-        raise vol.Invalid("Expected a string or a list of strings")
-    return validate
+        return {
+            "trv_climate_entities": self._trv_climate_entities,
+            "max_demand_delta": self._max_demand_delta,
+            "max_demand_current_temperature": self._max_demand_current_temperature,
+            "max_demand_target_temperature": self._max_demand_target_temperature,
+            "max_demand_trv_entity_id": self._max_demand_trv_entity_id,
+            "heater_entity_id": self._heater_entity_id,
+        }
 

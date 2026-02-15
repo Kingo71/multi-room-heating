@@ -92,6 +92,58 @@ Here is a sample automation. You can add this to your `automations.yaml` file or
 
 **Important:** Adjust the `temperature` values (`30` and `5`) to suitable settings for your boiler. `30` should be high enough to always trigger a call for heat, and `5` should be low enough to reliably stop it.
 
+## OpenTherm / Modulation Support
+
+This integration is designed to work with OpenTherm thermostats (via ESPHome or similar) that require a target temperature input rather than a simple on/off switch.
+
+The sensor exposes additional attributes representing the "Maximum Demand" (the room with the largest gap between current and target temperature):
+
+-   `max_demand_current_temperature`: The current temperature of the room with the highest heating deficit.
+-   `max_demand_target_temperature`: The target temperature of that same room.
+-   `max_demand_delta`: The difference between target and current temperature.
+-   `max_demand_trv_entity_id`: The entity ID of the TRV driving the demand.
+
+### ESPHome Configuration Example
+
+You can use these attributes to feed your OpenTherm PID regulator or thermostat component in ESPHome. Here is an example of how to import these values:
+
+```yaml
+sensor:
+  - platform: homeassistant
+    id: central_current_temp
+    entity_id: sensor.central_heating_demand
+    attribute: max_demand_current_temperature
+
+  - platform: homeassistant
+    id: central_target_temp
+    entity_id: sensor.central_heating_demand
+    attribute: max_demand_target_temperature
+```
+
+### Direct Boiler Control
+
+You can also configure this integration to directly control your boiler/heater entity (e.g., an OpenTherm thermostat connected via ESPHome).
+
+If you add the `heater_entity_id` to your configuration, the integration will automatically:
+1.  **Set Target Temp**: When heating is needed, it sets the heater's target temperature to match the room with the highest demand.
+2.  **Frost Protection**: When no heating is needed, it sets the heater's target temperature to a minimum value (default 5°C).
+
+**Configuration Example:**
+
+```yaml
+sensor:
+  - platform: central_heating_demand
+    trv_climate_entities:
+      - climate.living_room
+      - climate.bedroom
+    
+    # Optional: Automatically control this heater entity
+    heater_entity_id: climate.my_boiler
+    
+    # Optional: Temperature to set when no heat is needed (default: 5.0)
+    minimum_temperature: 15
+```
+
 ## Troubleshooting
 
 -   **Sensor not appearing:**
