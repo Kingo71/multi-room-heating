@@ -120,6 +120,7 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
         self._last_sent_target_temperature = None
         self._last_sent_hvac_mode = None
         self._max_demand_trv_name = None
+        self._is_away = False
 
     async def async_added_to_hass(self) -> None:
         """Register callbacks when entity is added."""
@@ -194,11 +195,11 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
         valid_trv_found = False
 
         # Check Away Mode
-        is_away = False
+        self._is_away = False
         if self._zone_entity_id:
             zone_state = self.hass.states.get(self._zone_entity_id)
             if zone_state and zone_state.state == "0":
-                is_away = True
+                self._is_away = True
 
 
         for entity_id in self._trv_climate_entities:
@@ -223,7 +224,7 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
             # A positive delta means heat is needed.
             # Implement Away Mode Logic: override target with away_temp if away
             effective_target_temperature = target_temperature
-            if is_away:
+            if self._is_away:
                 effective_target_temperature = self._away_temp
 
             delta = effective_target_temperature - current_temperature
@@ -337,5 +338,7 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
             "max_demand_trv_entity_id": self._max_demand_trv_entity_id,
             "max_demand_trv_name": self._max_demand_trv_name,
             "heater_entity_id": self._heater_entity_id,
+            "away_mode": self._is_away,
+            "away_temperature": self._away_temp,
         }
 

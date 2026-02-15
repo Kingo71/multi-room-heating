@@ -118,6 +118,8 @@ The binary sensor exposes additional attributes representing the "Maximum Demand
 -   `max_demand_delta`: The difference between target and current temperature (clamped to 0 if negative).
 -   `max_demand_trv_entity_id`: The entity ID of the TRV driving the demand.
 -   `max_demand_trv_name`: The friendly name of the TRV driving the demand (e.g. "Living Room TRV").
+-   `away_mode`: Boolean (`true`/`false`) indicating if Away Mode is currently active.
+-   `away_temperature`: The configured `away_temp` value.
 
 ### ESPHome Configuration Example
 
