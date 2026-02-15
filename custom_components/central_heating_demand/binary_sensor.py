@@ -107,6 +107,7 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
         self._max_demand_trv_entity_id = None
         self._last_sent_target_temperature = None
         self._last_sent_hvac_mode = None
+        self._max_demand_trv_name = None
 
     async def async_added_to_hass(self) -> None:
         """Register callbacks when entity is added."""
@@ -161,6 +162,7 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
         leader_entity_id = None
         leader_current_temp = None
         leader_target_temp = None
+        leader_friendly_name = None
         
         # Track if we found at least one valid TRV to report on
         valid_trv_found = False
@@ -175,6 +177,7 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
             current_temperature = state.attributes.get("current_temperature")
             target_temperature = state.attributes.get("temperature")
             trv_state = state.state
+            friendly_name = state.attributes.get("friendly_name")
 
             # Ensure we have valid numbers to work with
             if current_temperature is None or target_temperature is None:
@@ -203,6 +206,7 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
                 leader_entity_id = entity_id
                 leader_current_temp = current_temperature
                 leader_target_temp = target_temperature
+                leader_friendly_name = friendly_name
 
         self._is_heating_demanded = demanding_trvs > 0
         
@@ -212,12 +216,14 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
              self._max_demand_current_temperature = leader_current_temp
              self._max_demand_target_temperature = leader_target_temp
              self._max_demand_trv_entity_id = leader_entity_id
+             self._max_demand_trv_name = leader_friendly_name
         else:
              # Fallback if no valid TRVs found
              self._max_demand_delta = 0.0
              self._max_demand_current_temperature = None
              self._max_demand_target_temperature = None
              self._max_demand_trv_entity_id = None
+             self._max_demand_trv_name = None
 
         # Control the heater if configured
         if self._heater_entity_id:
@@ -290,6 +296,7 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
             "max_demand_current_temperature": self._max_demand_current_temperature,
             "max_demand_target_temperature": self._max_demand_target_temperature,
             "max_demand_trv_entity_id": self._max_demand_trv_entity_id,
+            "max_demand_trv_name": self._max_demand_trv_name,
             "heater_entity_id": self._heater_entity_id,
         }
 

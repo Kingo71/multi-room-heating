@@ -111,6 +111,7 @@ The binary sensor exposes additional attributes representing the "Maximum Demand
 -   `max_demand_target_temperature`: The target temperature of that same room.
 -   `max_demand_delta`: The difference between target and current temperature (clamped to 0 if negative).
 -   `max_demand_trv_entity_id`: The entity ID of the TRV driving the demand.
+-   `max_demand_trv_name`: The friendly name of the TRV driving the demand (e.g. "Living Room TRV").
 
 ### ESPHome Configuration Example
 
