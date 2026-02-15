@@ -52,9 +52,15 @@ binary_sensor:
       - climate.trv_living_room   # Replace with your first TRV entity ID
       - climate.trv_bedroom       # Replace with your second TRV entity ID
       # Add all your TRV climate entity IDs here
+    
+    # Optional: Away Mode Detection
+    zone_entity_id: zone.home     # The zone to monitor for presence
+    away_temp: 12.0               # Target temperature when no one is home (default: 12.0)
 ```
 
 -   **`trv_climate_entities` (Required):** A list of the `entity_id`s for all the TRV `climate` entities you want to monitor.
+-   **`zone_entity_id` (Optional):** The entity ID of the zone to monitor (e.g., `zone.home`). If the state of this zone is `0` (nobody home), the integration will override the target temperature calculation using `away_temp`.
+-   **`away_temp` (Optional):** The target temperature to use when the zone is empty (default: 12.0).
 
 ## Usage
 

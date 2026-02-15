@@ -57,6 +57,8 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
         ),
         vol.Optional(CONF_HEATER_ENTITY_ID): str,
         vol.Optional(CONF_MINIMUM_TEMPERATURE, default=5.0): vol.Coerce(float),
+        vol.Optional("away_temp", default=12.0): vol.Coerce(float),
+        vol.Optional("zone_entity_id"): str,
     }
 )
 
@@ -70,12 +72,18 @@ async def async_setup_platform(
     """Set up the Central Heating Demand sensor platform."""
     trv_climate_entities: list[str] = config[CONF_TRV_CLIMATE_ENTITIES]
     heater_entity_id: str | None = config.get(CONF_HEATER_ENTITY_ID)
-    minimum_temperature: float = config[CONF_MINIMUM_TEMPERATURE]
+    away_temp: float = config["away_temp"]
+    zone_entity_id: str | None = config.get("zone_entity_id")
 
     async_add_entities(
         [
             CentralHeatingDemandBinarySensor(
-                hass, trv_climate_entities, heater_entity_id, minimum_temperature
+                hass,
+                trv_climate_entities,
+                heater_entity_id,
+                minimum_temperature,
+                away_temp,
+                zone_entity_id,
             )
         ]
     )
@@ -94,12 +102,16 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
         trv_climate_entities: list[str],
         heater_entity_id: str | None,
         minimum_temperature: float,
+        away_temp: float,
+        zone_entity_id: str | None,
     ) -> None:
         """Initialize the sensor."""
         self.hass = hass
         self._trv_climate_entities = trv_climate_entities
         self._heater_entity_id = heater_entity_id
         self._minimum_temperature = minimum_temperature
+        self._away_temp = away_temp
+        self._zone_entity_id = zone_entity_id
         self._is_heating_demanded = False
         self._max_demand_delta = 0.0
         self._max_demand_current_temperature = None
@@ -117,6 +129,13 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
             )
         )
 
+        if self._zone_entity_id:
+            self.async_on_remove(
+                async_track_state_change_event(
+                    self.hass, [self._zone_entity_id], self._async_zone_state_listener
+                )
+            )
+
         # Initial state update when Home Assistant starts
         self.hass.bus.async_listen_once(
             EVENT_HOMEASSISTANT_START, self._async_update_on_start
@@ -125,6 +144,12 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
     @callback
     def _async_update_on_start(self, event: Event) -> None:
         """Update state when Home Assistant starts."""
+        self._async_update_heating_demand()
+        self.async_write_ha_state()
+
+    @callback
+    def _async_zone_state_listener(self, event: Event) -> None:
+        """Handle Zone state changes."""
         self._async_update_heating_demand()
         self.async_write_ha_state()
 
@@ -164,8 +189,17 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
         leader_target_temp = None
         leader_friendly_name = None
         
+        
         # Track if we found at least one valid TRV to report on
         valid_trv_found = False
+
+        # Check Away Mode
+        is_away = False
+        if self._zone_entity_id:
+            zone_state = self.hass.states.get(self._zone_entity_id)
+            if zone_state and zone_state.state == "0":
+                is_away = True
+
 
         for entity_id in self._trv_climate_entities:
             state = self.hass.states.get(entity_id)
@@ -187,7 +221,12 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
             
             # Calculate demand delta (Target - Current)
             # A positive delta means heat is needed.
-            delta = target_temperature - current_temperature
+            # Implement Away Mode Logic: override target with away_temp if away
+            effective_target_temperature = target_temperature
+            if is_away:
+                effective_target_temperature = self._away_temp
+
+            delta = effective_target_temperature - current_temperature
 
             # Check for binary demand (existing logic + check)
             is_demanding = False
