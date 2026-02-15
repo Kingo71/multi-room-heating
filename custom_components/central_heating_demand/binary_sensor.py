@@ -72,6 +72,7 @@ async def async_setup_platform(
     """Set up the Central Heating Demand sensor platform."""
     trv_climate_entities: list[str] = config[CONF_TRV_CLIMATE_ENTITIES]
     heater_entity_id: str | None = config.get(CONF_HEATER_ENTITY_ID)
+    minimum_temperature: float = config[CONF_MINIMUM_TEMPERATURE]
     away_temp: float = config["away_temp"]
     zone_entity_id: str | None = config.get("zone_entity_id")
 
