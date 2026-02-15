@@ -74,8 +74,6 @@ async def async_setup_platform(
 
     async_add_entities(
         [
-    async_add_entities(
-        [
             CentralHeatingDemandBinarySensor(
                 hass, trv_climate_entities, heater_entity_id, minimum_temperature
             )
