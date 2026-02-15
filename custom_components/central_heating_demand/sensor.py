@@ -291,6 +291,5 @@ class CentralHeatingDemandSensor(SensorEntity):
             "max_demand_target_temperature": self._max_demand_target_temperature,
             "max_demand_trv_entity_id": self._max_demand_trv_entity_id,
             "heater_entity_id": self._heater_entity_id,
-            "heating_active": self._is_heating_demanded,
         }
 
