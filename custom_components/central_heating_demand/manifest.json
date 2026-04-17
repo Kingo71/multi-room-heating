@@ -1,10 +1,10 @@
 {
   "domain": "central_heating_demand",
   "name": "Central Heating Demand",
-  "documentation": "https://github.com/your_github_username/central_heating_demand",
-  "issue_tracker": "https://github.com/your_github_username/central_heating_demand/issues",
+  "documentation": "https://github.com/Kingo71/multi-room-heating",
+  "issue_tracker": "https://github.com/Kingo71/multi-room-heating/issues",
   "dependencies": [],
-  "codeowners": ["@your_github_username"],
+  "codeowners": ["@Kingo71"],
   "requirements": [],
-  "version": "1.0.0"
+  "version": "1.1.0"
 }

@@ -1,7 +1,9 @@
 """Binary sensor platform for the central heating demand integration."""
 from __future__ import annotations
 
+import asyncio
 import logging
+import math
 
 import voluptuous as vol
 
@@ -19,46 +21,29 @@ from homeassistant.core import (
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.helpers.event import async_track_state_change_event
+import homeassistant.helpers.config_validation as cv
 
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "central_heating_demand"
 
-
-# Helper function for vol.All(vol.EnsureSquareBracketedString(), [str])
-# This is to handle cases where the user might pass a single string instead of a list
-# or a string that should be parsed as a list.
-def EnsureSquareBracketedString():
-    def validate(value):
-        if isinstance(value, str):
-            try:
-                # Attempt to parse as a JSON list (e.g., '["climate.trv1", "climate.trv2"]')
-                import json
-                parsed_value = json.loads(value)
-                if isinstance(parsed_value, list):
-                    return parsed_value
-            except json.JSONDecodeError:
-                pass
-            # If it's a single string, treat it as a list with one item
-            return [value]
-        elif isinstance(value, list):
-            return value
-        raise vol.Invalid("Expected a string or a list of strings")
-    return validate
-
 CONF_TRV_CLIMATE_ENTITIES = "trv_climate_entities"
 CONF_HEATER_ENTITY_ID = "heater_entity_id"
 CONF_MINIMUM_TEMPERATURE = "minimum_temperature"
+CONF_HYSTERESIS = "hysteresis"
+CONF_AWAY_TEMP = "away_temp"
+CONF_ZONE_ENTITY_ID = "zone_entity_id"
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
         vol.Required(CONF_TRV_CLIMATE_ENTITIES): vol.All(
-            EnsureSquareBracketedString(), [str]
+            cv.ensure_list, [str]
         ),
         vol.Optional(CONF_HEATER_ENTITY_ID): str,
         vol.Optional(CONF_MINIMUM_TEMPERATURE, default=5.0): vol.Coerce(float),
-        vol.Optional("away_temp", default=12.0): vol.Coerce(float),
-        vol.Optional("zone_entity_id"): str,
+        vol.Optional(CONF_AWAY_TEMP, default=12.0): vol.Coerce(float),
+        vol.Optional(CONF_ZONE_ENTITY_ID): str,
+        vol.Optional(CONF_HYSTERESIS, default=0.5): vol.Coerce(float),
     }
 )
 
@@ -73,8 +58,9 @@ async def async_setup_platform(
     trv_climate_entities: list[str] = config[CONF_TRV_CLIMATE_ENTITIES]
     heater_entity_id: str | None = config.get(CONF_HEATER_ENTITY_ID)
     minimum_temperature: float = config[CONF_MINIMUM_TEMPERATURE]
-    away_temp: float = config["away_temp"]
-    zone_entity_id: str | None = config.get("zone_entity_id")
+    away_temp: float = config[CONF_AWAY_TEMP]
+    zone_entity_id: str | None = config.get(CONF_ZONE_ENTITY_ID)
+    hysteresis: float = config[CONF_HYSTERESIS]
 
     async_add_entities(
         [
@@ -85,6 +71,7 @@ async def async_setup_platform(
                 minimum_temperature,
                 away_temp,
                 zone_entity_id,
+                hysteresis,
             )
         ]
     )
@@ -105,6 +92,7 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
         minimum_temperature: float,
         away_temp: float,
         zone_entity_id: str | None,
+        hysteresis: float,
     ) -> None:
         """Initialize the sensor."""
         self.hass = hass
@@ -113,6 +101,7 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
         self._minimum_temperature = minimum_temperature
         self._away_temp = away_temp
         self._zone_entity_id = zone_entity_id
+        self._hysteresis = hysteresis
         self._is_heating_demanded = False
         self._max_demand_delta = 0.0
         self._max_demand_current_temperature = None
@@ -122,9 +111,35 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
         self._last_sent_hvac_mode = None
         self._max_demand_trv_name = None
         self._is_away = False
+        self._heater_lock = asyncio.Lock()
+
+    @property
+    def unique_id(self) -> str:
+        """Return unique ID for the entity."""
+        return f"{DOMAIN}_central_heating_demand"
+
+    @property
+    def device_info(self):
+        """Return device info for grouping in the UI."""
+        return {
+            "identifiers": {(DOMAIN, "central_heating_demand")},
+            "name": "Central Heating Demand",
+            "manufacturer": "Custom Integration",
+        }
 
     async def async_added_to_hass(self) -> None:
         """Register callbacks when entity is added."""
+        # Validate TRV entities at startup
+        missing_entities = [
+            eid for eid in self._trv_climate_entities
+            if not self.hass.states.get(eid)
+        ]
+        if missing_entities:
+            _LOGGER.warning(
+                "TRV entities not found at startup (may appear later): %s",
+                missing_entities
+            )
+
         self.async_on_remove(
             async_track_state_change_event(
                 self.hass, self._trv_climate_entities, self._async_trv_state_listener
@@ -139,8 +154,10 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
             )
 
         # Initial state update when Home Assistant starts
-        self.hass.bus.async_listen_once(
-            EVENT_HOMEASSISTANT_START, self._async_update_on_start
+        self.async_on_remove(
+            self.hass.bus.async_listen_once(
+                EVENT_HOMEASSISTANT_START, self._async_update_on_start
+            )
         )
 
     @callback
@@ -152,6 +169,10 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
     @callback
     def _async_zone_state_listener(self, event: Event) -> None:
         """Handle Zone state changes."""
+        old_state: State | None = event.data.get("old_state")
+        new_state: State | None = event.data.get("new_state")
+        if old_state and new_state and old_state.state == new_state.state:
+            return
         self._async_update_heating_demand()
         self.async_write_ha_state()
 
@@ -166,7 +187,8 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
             old_state
             and new_state
             and (
-                old_state.attributes.get("hvac_action")
+                old_state.state != new_state.state
+                or old_state.attributes.get("hvac_action")
                 != new_state.attributes.get("hvac_action")
                 or old_state.attributes.get("current_temperature")
                 != new_state.attributes.get("current_temperature")
@@ -184,14 +206,14 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
     @callback
     def _async_update_heating_demand(self) -> None:
         """Calculate if any TRV is currently demanding heating and find the max demand."""
+        previous_demand_state = self._is_heating_demanded
         demanding_trvs = 0
-        max_delta = -100.0  # Initialize with a very low value
+        max_delta = float('-inf')
         leader_entity_id = None
         leader_current_temp = None
         leader_target_temp = None
         leader_friendly_name = None
-        
-        
+
         # Track if we found at least one valid TRV to report on
         valid_trv_found = False
 
@@ -201,7 +223,6 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
             zone_state = self.hass.states.get(self._zone_entity_id)
             if zone_state and zone_state.state == "0":
                 self._is_away = True
-
 
         for entity_id in self._trv_climate_entities:
             state = self.hass.states.get(entity_id)
@@ -218,9 +239,17 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
             # Ensure we have valid numbers to work with
             if current_temperature is None or target_temperature is None:
                 continue
-                
+
+            # Validate temperature values are finite numbers
+            if not math.isfinite(current_temperature) or not math.isfinite(target_temperature):
+                _LOGGER.warning(
+                    "Invalid temperature value for %s: current=%s, target=%s",
+                    entity_id, current_temperature, target_temperature
+                )
+                continue
+
             valid_trv_found = True
-            
+
             # Calculate demand delta (Target - Current)
             # A positive delta means heat is needed.
             # Implement Away Mode Logic: override target with away_temp if away
@@ -230,41 +259,58 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
 
             delta = effective_target_temperature - current_temperature
 
-            # Check for binary demand (existing logic + check)
+            # Check for binary demand with hysteresis
+            # Turn ON when delta > hysteresis, turn OFF when delta <= 0
             is_demanding = False
             if hvac_action == "heating" or (
                 trv_state == "heat"
-                and delta > 0
+                and delta > self._hysteresis
             ):
                 is_demanding = True
                 demanding_trvs += 1
 
             # Determine if this TRV has the highest demand (largest deficit)
-            # We track the max delta even if it's negative (closest to target) 
+            # We track the max delta even if it's negative (closest to target)
             # so we always report *something* reasonable to the OpenTherm thermostat.
             if delta > max_delta:
                 max_delta = delta
                 leader_entity_id = entity_id
                 leader_current_temp = current_temperature
-                leader_target_temp = target_temperature
+                leader_target_temp = effective_target_temperature
                 leader_friendly_name = friendly_name
 
         self._is_heating_demanded = demanding_trvs > 0
-        
+
         if valid_trv_found and leader_entity_id:
-             # User Request: If demand delta is negative, show it as zero.
-             self._max_demand_delta = max(0.0, max_delta)
-             self._max_demand_current_temperature = leader_current_temp
-             self._max_demand_target_temperature = leader_target_temp
-             self._max_demand_trv_entity_id = leader_entity_id
-             self._max_demand_trv_name = leader_friendly_name
+            # User Request: If demand delta is negative, show it as zero.
+            self._max_demand_delta = max(0.0, max_delta)
+            self._max_demand_current_temperature = leader_current_temp
+            self._max_demand_target_temperature = leader_target_temp
+            self._max_demand_trv_entity_id = leader_entity_id
+            self._max_demand_trv_name = leader_friendly_name
         else:
-             # Fallback if no valid TRVs found
-             self._max_demand_delta = 0.0
-             self._max_demand_current_temperature = None
-             self._max_demand_target_temperature = None
-             self._max_demand_trv_entity_id = None
-             self._max_demand_trv_name = None
+            # Fallback if no valid TRVs found
+            if not valid_trv_found:
+                _LOGGER.warning(
+                    "No valid TRV entities found with temperature data. "
+                    "Heating demand cannot be calculated."
+                )
+            self._max_demand_delta = 0.0
+            self._max_demand_current_temperature = None
+            self._max_demand_target_temperature = None
+            self._max_demand_trv_entity_id = None
+            self._max_demand_trv_name = None
+
+        # Log state transitions at info level for easier debugging
+        if self._is_heating_demanded != previous_demand_state:
+            if self._is_heating_demanded:
+                _LOGGER.info(
+                    "Heating demand ON - max demand: %s at +%.1f°C",
+                    self._max_demand_trv_name or self._max_demand_trv_entity_id,
+                    self._max_demand_delta
+                )
+            else:
+                _LOGGER.info("Heating demand OFF - all TRVs satisfied")
 
         # Control the heater if configured
         if self._heater_entity_id:
@@ -274,7 +320,7 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
             if self._is_heating_demanded:
                 target_hvac_mode = "heat"
                 if self._max_demand_target_temperature is not None:
-                     target_to_set = self._max_demand_target_temperature
+                    target_to_set = self._max_demand_target_temperature
 
             self.hass.async_create_task(
                 self._async_control_heater(target_to_set, target_hvac_mode)
@@ -282,45 +328,44 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
 
     async def _async_control_heater(self, target_temp: float, target_hvac_mode: str) -> None:
         """Send command to heater if configuration has changed."""
-        
-        # 1. Handle Temperature Change
-        if self._last_sent_target_temperature != target_temp:
-            _LOGGER.debug(
-                "Setting heater %s temperature to %s", self._heater_entity_id, target_temp
-            )
-            try:
-                await self.hass.services.async_call(
-                    "climate",
-                    "set_temperature",
-                    {
-                        "entity_id": self._heater_entity_id,
-                        "temperature": target_temp,
-                    },
-                    blocking=False,
+        async with self._heater_lock:
+            # 1. Handle Temperature Change
+            if self._last_sent_target_temperature != target_temp:
+                _LOGGER.debug(
+                    "Setting heater %s temperature to %s", self._heater_entity_id, target_temp
                 )
-                self._last_sent_target_temperature = target_temp
-            except Exception as e:
-                _LOGGER.error("Failed to set heater temperature: %s", e)
+                try:
+                    await self.hass.services.async_call(
+                        "climate",
+                        "set_temperature",
+                        {
+                            "entity_id": self._heater_entity_id,
+                            "temperature": target_temp,
+                        },
+                        blocking=False,
+                    )
+                    self._last_sent_target_temperature = target_temp
+                except Exception as e:
+                    _LOGGER.error("Failed to set heater temperature: %s", e)
 
-        # 2. Handle HVAC Mode Change
-        # We check a new instance variable _last_sent_hvac_mode (need to init it)
-        if getattr(self, "_last_sent_hvac_mode", None) != target_hvac_mode:
-            _LOGGER.debug(
-                "Setting heater %s hvac_mode to %s", self._heater_entity_id, target_hvac_mode
-            )
-            try:
-                await self.hass.services.async_call(
-                    "climate",
-                    "set_hvac_mode",
-                    {
-                        "entity_id": self._heater_entity_id,
-                        "hvac_mode": target_hvac_mode,
-                    },
-                    blocking=False,
+            # 2. Handle HVAC Mode Change
+            if self._last_sent_hvac_mode != target_hvac_mode:
+                _LOGGER.debug(
+                    "Setting heater %s hvac_mode to %s", self._heater_entity_id, target_hvac_mode
                 )
-                self._last_sent_hvac_mode = target_hvac_mode
-            except Exception as e:
-                _LOGGER.error("Failed to set heater hvac_mode: %s", e)
+                try:
+                    await self.hass.services.async_call(
+                        "climate",
+                        "set_hvac_mode",
+                        {
+                            "entity_id": self._heater_entity_id,
+                            "hvac_mode": target_hvac_mode,
+                        },
+                        blocking=False,
+                    )
+                    self._last_sent_hvac_mode = target_hvac_mode
+                except Exception as e:
+                    _LOGGER.error("Failed to set heater hvac_mode: %s", e)
 
 
     @property
@@ -341,5 +386,6 @@ class CentralHeatingDemandBinarySensor(BinarySensorEntity):
             "heater_entity_id": self._heater_entity_id,
             "away_mode": self._is_away,
             "away_temperature": self._away_temp,
+            "hysteresis": self._hysteresis,
         }
 
